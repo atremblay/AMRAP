@@ -25,7 +25,8 @@ class Athlete(Base):
     region = Column(Integer)
 
     def __repr__(self):
-        return "<Athlete(name={}, id={})>".format(self.name, self.id)
+        return "<Athlete(name={}, id={}, division={}, region={})>".format(
+            self.name, self.id, self.division, self.region)
 
 
 class Workout(Base):
@@ -45,7 +46,7 @@ class Workout(Base):
 
 
 
-engine = create_engine('sqlite:///opens2015.db', echo=False)
+engine = create_engine('sqlite:///opens2014.db', echo=False)
 
 Session = sessionmaker()
 Session.configure(bind=engine)
@@ -117,7 +118,7 @@ def register_score(athlete, soup):
 def query(division, region, page):
     website = "http://games.crossfit.com/scores/leaderboard.php"
     params = {
-        "stage":0,
+        "stage":5,
         "sort":0,
         "division":division,
         "region": region,
@@ -127,7 +128,7 @@ def query(division, region, page):
         "frontpage":0,
         "expanded":0,
         "full":1,
-        "year":15,
+        "year":14,
         "showtoggles":0,
         "hidedropdowns":0,
         "showathleteac":1,
@@ -139,8 +140,8 @@ def query(division, region, page):
 
 
 def download():
-    divisions = range(1,18)
-    regions = range(1,19)
+    divisions = range(1,14)
+    regions = range(1,18)
     div_reg = itertools.product(divisions, regions)
 
     athletes = []
@@ -155,7 +156,7 @@ def download():
             tries = 0
             while tries < 5:
                 try:
-                    r = requests.get(url, params=params)
+                    r = requests.get(url, params=params, timeout=5)
                     break
                 except Exception as e:
                     # print(e)
@@ -175,5 +176,4 @@ def download():
                 break
 
             page += 1
-
 

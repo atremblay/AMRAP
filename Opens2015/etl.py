@@ -82,7 +82,7 @@ def get_athletes(params, source):
         #     print(traceback.format_exc())
         #     continue
         except IntegrityError as ie:
-            print("Error in importing {}".format(athlete))
+            print("{} already in the database".format(athlete))
             # print(ie)
             # print(traceback.format_exc())
             s.rollback()
@@ -155,7 +155,7 @@ def download():
             tries = 0
             while tries < 5:
                 try:
-                    r = requests.get(url, params=params)
+                    r = requests.get(url, params=params, timeout=5)
                     break
                 except Exception as e:
                     # print(e)
@@ -176,4 +176,72 @@ def download():
 
             page += 1
 
+regex = re.compile("([0-9]+) \(([0-9]+)\)( \- s)*")
+def score(x):
+    if x == '-- (--)':
+        return None
+    try:
+        match  = regex.match(x)
+    except:
+        return None
+    if match is None:
+        return None
+
+    groups = match.groups()
+    if len(groups) == 3:
+        return int(groups[1])
+    raise RuntimeError("{}".format(groups))
+
+def Rx(x):
+    if x == '-- (--)':
+        return None
+    try:
+        match  = regex.match(x)
+    except:
+        return None
+    if match is None:
+        return 0
+    groups = match.groups()
+    if groups[2] is not None:
+        return 0
+    return 1
+
+def load_data(db_path):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    res = cur.execute("""SELECT athlete.id, athlete.name, athlete.division,
+        athlete.region, workout.name as wod, workout.score as score
+        FROM athlete JOIN workout on athlete.id=workout.athlete_id""")
+
+    df = DataFrame.from_records(
+        res.fetchall(),
+        columns=[x[0] for x in res.description])
+
+    pivoted = df.pivot_table(
+        columns='wod',
+        values='score',
+        aggfunc=lambda x: x,
+        index=['id','name','division','region'])
+
+    pivoted.reset_index(['name','division','region'], inplace=True)
+    pivoted['15.1'] = pivoted[0].apply(score)
+    pivoted['15.1 Rx'] = pivoted[0].apply(Rx)
+
+    pivoted['15.1a'] = pivoted[1].apply(score)
+    pivoted['15.1a Rx'] = pivoted[1].apply(Rx)
+
+    pivoted['15.2'] = pivoted[2].apply(score)
+    pivoted['15.2 Rx'] = pivoted[2].apply(Rx)
+
+    pivoted['15.3'] = pivoted[3].apply(score)
+    pivoted['15.3 Rx'] = pivoted[3].apply(Rx)
+
+    del pivoted[0]
+    del pivoted[1]
+    del pivoted[2]
+    del pivoted[3]
+    del pivoted[4]
+    del pivoted[5]
+
+    return pivoted
 
