@@ -8,15 +8,16 @@ from sqlalchemy.exc import IntegrityError
 import requests
 import sqlite3
 from bs4 import BeautifulSoup
-import json
 from pandas import DataFrame
-import pandas as pd
 import re
 import traceback
 import time
 import itertools
+import os
 
 Base = declarative_base()
+
+
 class Athlete(Base):
     __tablename__ = 'athlete'
     id = Column(Integer, primary_key=True)
@@ -35,15 +36,12 @@ class Workout(Base):
     score = Column(String)
 
     athlete_id = Column(Integer, ForeignKey('athlete.id'))
-    # Use cascade='delete,all' to propagate the deletion of a Department onto its Employees
     athlete = relationship(
         Athlete,
         backref=backref('workouts', uselist=True))
 
     def __repr__(self):
         return "<Workout(name={}, score={})>".format(self.name, self.score)
-
-
 
 engine = create_engine('sqlite:///opens2015.db', echo=False)
 
@@ -58,13 +56,14 @@ def get_athletes(params, source):
     region = params['region']
 
     soup = BeautifulSoup(source)
-    leaderboard = soup.findAll('table', attrs={"id":"lbtable"})[0]
-    participants = leaderboard.findAll('tr',attrs={'class':""})
-    d = []
+    leaderboard = soup.findAll('table', attrs={"id": "lbtable"})[0]
+    participants = leaderboard.findAll('tr', attrs={'class': ""})
     registered_new_athlete = False
+
+    num_new_athletes = 0
     for participant in participants[1:]:
 
-        position = participant.findAll('td',attrs={'class':"number"})
+        position = participant.findAll('td', attrs={'class': "number"})
         if len(participant) == 0:
             continue
         try:
@@ -73,18 +72,16 @@ def get_athletes(params, source):
             athlete.division = division
             athlete.region = region
             register_score(athlete, participant)
+            # print(athlete)
             s.add(athlete)
             s.flush()
             s.commit()
+            s.clear()
             registered_new_athlete = True
-        # except FlushError as fe:
-        #     print(fe)
-        #     print(traceback.format_exc())
-        #     continue
-        except IntegrityError as ie:
-            print("{} already in the database".format(athlete))
-            # print(ie)
-            # print(traceback.format_exc())
+            num_new_athletes += 1
+            # print("added")
+        except IntegrityError:
+            # print("{} already in the database".format(athlete))
             s.rollback()
             continue
         except Exception as e:
@@ -93,20 +90,20 @@ def get_athletes(params, source):
             print(traceback.format_exc())
             s.rollback()
             continue
-    return registered_new_athlete
+    return registered_new_athlete, num_new_athletes
 
 
 def build_athlete(soup):
-    name_ = soup.findAll('td',attrs={'class':"name"})[0]
-    link = name_.findAll('a')[0].attrs['href']
+    name_ = soup.find('td', attrs={'class': "name"})
+    link = name_.find('a').attrs['href']
     athlete_id = link.split('/')[-1]
-    athlete_name = name_.findAll('a')[0].contents[0]
+    athlete_name = name_.find('a').contents[0]
     athlete = Athlete(id=int(athlete_id), name=athlete_name)
     return athlete
 
 
 def register_score(athlete, soup):
-    score_cells = soup.findAll('td', attrs={"class":"score-cell"})
+    score_cells = soup.findAll('td', attrs={"class": "score-cell"})
     scores = [score_cell.span.contents[0].strip() for score_cell in score_cells]
 
     for i, score in enumerate(scores):
@@ -117,39 +114,46 @@ def register_score(athlete, soup):
 def query(division, region, page):
     website = "http://games.crossfit.com/scores/leaderboard.php"
     params = {
-        "stage":0,
-        "sort":0,
-        "division":division,
+        "stage": 0,
+        "sort": 0,
+        "division": division,
         "region": region,
-        "numberperpage":100,
-        "page":page,
-        "competition":0,
-        "frontpage":0,
-        "expanded":0,
-        "full":1,
-        "year":15,
-        "showtoggles":0,
-        "hidedropdowns":0,
-        "showathleteac":1,
-        "athletename":None,
-        "fittest":1,
-        "fitSelect":0,
-        "scaled":0}
+        "numberperpage": 100,
+        "page": page,
+        "competition": 0,
+        "frontpage": 0,
+        "expanded": 0,
+        "full": 1,
+        "year": 15,
+        "showtoggles": 0,
+        "hidedropdowns": 0,
+        "showathleteac": 1,
+        "athletename": None,
+        "fittest": 1,
+        "fitSelect": 0,
+        "scaled": 0}
     return website, params
 
 
 def download():
-    divisions = range(1,18)
-    regions = range(1,19)
+
+    # Reversing the order of the division because
+    # the masters divisions are also in division 1
+    # so doing division 1 first prevent from getting the
+    # "real" division of the masters because if the unique clause
+    # on insert. Reversing will cause to insert them from the masters
+    # division first and they will not be inserted again when division
+    # 1 is processed
+    divisions = reversed(range(1, 18))
+    regions = range(1, 18)
     div_reg = itertools.product(divisions, regions)
 
-    athletes = []
-    previous_name = ""
     for division, region in div_reg:
         page = 1
-
+        new_athletes = 0
         while True:
-            print("Division:{} Region:{} Page:{}".format(division, region, page))
+            print("Division:{} Region:{} Page:{}".format(
+                division, region, page))
             url, params = query(division, region, page)
 
             tries = 0
@@ -157,9 +161,7 @@ def download():
                 try:
                     r = requests.get(url, params=params, timeout=5)
                     break
-                except Exception as e:
-                    # print(e)
-                    # print(traceback.format_exc(e))
+                except Exception:
                     print("Try {}".format(tries))
                     tries += 1
                     time.sleep(2)
@@ -170,18 +172,25 @@ def download():
                 page += 1
                 continue
 
-            registered_new_athlete = get_athletes(params, r.content)
+            registered_new_athlete, num_new_athletes = get_athletes(
+                params, r.content)
+            new_athletes += num_new_athletes
+            print("{} athletes".format(num_new_athletes))
             if not registered_new_athlete:
                 break
 
             page += 1
+        print("Division: {} Region:{} Athletes:{}".format(
+            division, region, new_athletes))
 
 regex = re.compile("([0-9]+) \(([0-9]+)\)( \- s)*")
+
+
 def score(x):
     if x == '-- (--)':
         return None
     try:
-        match  = regex.match(x)
+        match = regex.match(x)
     except:
         return None
     if match is None:
@@ -192,11 +201,12 @@ def score(x):
         return int(groups[1])
     raise RuntimeError("{}".format(groups))
 
+
 def Rx(x):
     if x == '-- (--)':
         return None
     try:
-        match  = regex.match(x)
+        match = regex.match(x)
     except:
         return None
     if match is None:
@@ -205,6 +215,7 @@ def Rx(x):
     if groups[2] is not None:
         return 0
     return 1
+
 
 def load_data(db_path):
     conn = sqlite3.connect(db_path)
@@ -221,9 +232,9 @@ def load_data(db_path):
         columns='wod',
         values='score',
         aggfunc=lambda x: x,
-        index=['id','name','division','region'])
+        index=['id', 'name', 'division', 'region'])
 
-    pivoted.reset_index(['name','division','region'], inplace=True)
+    pivoted.reset_index(['name', 'division', 'region'], inplace=True)
     pivoted['15.1'] = pivoted[0].apply(score)
     pivoted['15.1 Rx'] = pivoted[0].apply(Rx)
 
